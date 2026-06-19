@@ -1,0 +1,76 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function userDoc(uid) {
+      return get(/databases/$(database)/documents/users/$(uid));
+    }
+
+    function isAdmin() {
+      return signedIn() && userDoc(request.auth.uid).data.isAdmin == true;
+    }
+
+    // users/{uid} - role + basic profile, created by the client right after sign-up
+    match /users/{uid} {
+      allow read: if isAdmin() || isSelf(uid);
+      allow create: if isSelf(uid)
+        && request.resource.data.role in ["mentor", "mentee"]
+        && request.resource.data.isAdmin == false;
+      allow update: if isAdmin()
+        || (isSelf(uid)
+            && request.resource.data.role == resource.data.role
+            && request.resource.data.isAdmin == resource.data.isAdmin);
+      allow delete: if isAdmin();
+    }
+
+    // mentorProfiles/{uid} - public mentor directory entries
+    match /mentorProfiles/{uid} {
+      allow read: if true;
+      allow create, update: if isAdmin() || isSelf(uid);
+      allow delete: if isAdmin() || isSelf(uid);
+    }
+
+    // menteeProfiles/{uid} - private to the mentee and admins
+    match /menteeProfiles/{uid} {
+      allow read: if isAdmin() || isSelf(uid);
+      allow create, update: if isAdmin() || isSelf(uid);
+      allow delete: if isAdmin() || isSelf(uid);
+    }
+
+    // mentorshipRequests/{id} - visible to its mentee, its mentor, and admins
+    match /mentorshipRequests/{requestId} {
+      allow read: if isAdmin()
+        || (signedIn() && request.auth.uid == resource.data.menteeId)
+        || (signedIn() && request.auth.uid == resource.data.mentorId);
+
+      allow create: if signedIn()
+        && request.resource.data.menteeId == request.auth.uid
+        && request.resource.data.status == "pending";
+
+      allow update: if isAdmin()
+        || (signedIn()
+            && request.auth.uid == resource.data.mentorId
+            && request.resource.data.status in ["approved", "rejected", "needs_info", "completed"])
+        || (signedIn()
+            && request.auth.uid == resource.data.menteeId
+            && resource.data.status == "needs_info"
+            && request.resource.data.status == "pending");
+
+      allow delete: if isAdmin();
+    }
+
+    // topics/{id} - shared list of mentorship topics
+    match /topics/{topicId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}

@@ -1,0 +1,195 @@
+import { Router, Request, Response } from "express";
+import * as admin from "firebase-admin";
+import { MentorProfile, MenteeProfile, UserDoc, UserRole } from "../types";
+import { signInWithPassword, IdentityToolkitError } from "../identityToolkit";
+import { sendWelcomeEmail, sendPasswordResetEmail } from "../email";
+
+const router = Router();
+const db = () => admin.firestore();
+
+// ─── Validation helpers ───────────────────────────────────────────────────────
+
+function isValidRole(role: unknown): role is UserRole {
+  return role === "mentor" || role === "mentee" || role === "admin";
+}
+
+function validateRegisterBody(body: Record<string, unknown>): string | null {
+  const { role, fullName, email, password, expertise, interests } = body;
+  if (!isValidRole(role)) return "INVALID_ROLE";
+  if (!fullName || !email || !password) return "MISSING_FIELDS";
+  if (role === "mentor" && (!Array.isArray(expertise) || expertise.length === 0)) return "MISSING_EXPERTISE";
+  if (role === "mentee" && (!Array.isArray(interests) || interests.length === 0)) return "MISSING_INTERESTS";
+  return null;
+}
+
+// ─── Profile builders ─────────────────────────────────────────────────────────
+
+function buildMentorProfile(
+  uid: string,
+  fullName: string,
+  email: string,
+  body: Record<string, unknown>,
+  now: admin.firestore.Timestamp
+): MentorProfile {
+  const { currentRole, company, expertise, yearsExperience, availability, linkedIn, calendlyUrl } = body;
+  return {
+    userId: uid,
+    fullName,
+    email,
+    currentRole: (currentRole as string) ?? null,
+    company: (company as string) ?? null,
+    expertise: expertise as string[],
+    yearsExperience: (yearsExperience as number) ?? null,
+    availability: availability === "unavailable" ? "unavailable" : "available",
+    linkedIn: (linkedIn as string) ?? null,
+    calendlyUrl: (calendlyUrl as string) ?? null,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function buildMenteeProfile(
+  uid: string,
+  fullName: string,
+  email: string,
+  body: Record<string, unknown>,
+  now: admin.firestore.Timestamp
+): MenteeProfile {
+  const { interests, experienceLevel, goals } = body;
+  return {
+    userId: uid,
+    fullName,
+    email,
+    experienceLevel: (experienceLevel as string) ?? null,
+    interests: interests as string[],
+    goals: (goals as string) ?? null,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+async function saveRoleProfile(
+  uid: string,
+  role: "mentor" | "mentee",
+  fullName: string,
+  email: string,
+  body: Record<string, unknown>,
+  now: admin.firestore.Timestamp
+): Promise<void> {
+  if (role === "mentor") {
+    const profile = buildMentorProfile(uid, fullName, email, body, now);
+    await db().collection("mentorProfiles").doc(uid).set(profile);
+  } else {
+    const profile = buildMenteeProfile(uid, fullName, email, body, now);
+    await db().collection("menteeProfiles").doc(uid).set(profile);
+  }
+}
+
+// ─── Routes ───────────────────────────────────────────────────────────────────
+
+// POST /auth/register - create a Firebase Auth user + users/{uid} + role profile, then sign in
+router.post("/register", async (req: Request, res: Response) => {
+  const body = req.body as Record<string, unknown>;
+  const { role, fullName, email, password } = body as {
+    role?: UserRole;
+    fullName?: string;
+    email?: string;
+    password?: string;
+  };
+
+  const validationError = validateRegisterBody(body);
+  if (validationError) {
+    res.status(400).json({ error: { code: validationError } });
+    return;
+  }
+
+  let uid: string;
+  try {
+    const userRecord = await admin.auth().createUser({ email, password, displayName: fullName });
+    uid = userRecord.uid;
+  } catch (err) {
+    const code = (err as { code?: string }).code ?? "auth/unknown-error";
+    res.status(400).json({ error: { code } });
+    return;
+  }
+
+  const now = admin.firestore.Timestamp.now();
+  const userDoc: UserDoc = { role: role!, fullName: fullName!, email: email!, isAdmin: false, createdAt: now };
+  await db().collection("users").doc(uid).set(userDoc);
+
+  // Admin accounts are created pending approval — no profile doc, no auto sign-in
+  if (role === "admin") {
+    res.status(201).json({ uid, email, role: "admin", pending: true });
+    return;
+  }
+
+  await saveRoleProfile(uid, role as "mentor" | "mentee", fullName!, email!, body, now);
+
+  sendWelcomeEmail(email!, fullName!, role as "mentor" | "mentee").catch((err) =>
+    console.error("Failed to send welcome email:", err)
+  );
+
+  try {
+    const session = await signInWithPassword(email!, password!);
+    res.status(201).json({
+      idToken: session.idToken,
+      refreshToken: session.refreshToken,
+      expiresIn: session.expiresIn,
+      uid,
+      email,
+      fullName,
+      role,
+    });
+  } catch (err) {
+    const code = err instanceof IdentityToolkitError ? err.code : "UNKNOWN_ERROR";
+    res.status(201).json({ uid, email, role, error: { code } });
+  }
+});
+
+// POST /auth/forgot-password - send a password reset email
+router.post("/forgot-password", async (req: Request, res: Response) => {
+  const { email } = req.body as { email?: string };
+  if (!email) {
+    res.status(400).json({ error: { code: "MISSING_FIELDS" } });
+    return;
+  }
+
+  try {
+    const resetLink = await admin.auth().generatePasswordResetLink(email);
+    await sendPasswordResetEmail(email, resetLink);
+  } catch (err) {
+    console.error("forgot-password error:", err);
+  }
+
+  res.json({ ok: true });
+});
+
+// POST /auth/login - verify credentials via Identity Toolkit, return a Firebase ID token
+router.post("/login", async (req: Request, res: Response) => {
+  const { email, password } = req.body as { email?: string; password?: string };
+  if (!email || !password) {
+    res.status(400).json({ error: { code: "MISSING_FIELDS" } });
+    return;
+  }
+
+  try {
+    const session = await signInWithPassword(email, password);
+    const userDoc = await db().collection("users").doc(session.localId).get();
+    const data = userDoc.data();
+    res.json({
+      idToken: session.idToken,
+      refreshToken: session.refreshToken,
+      expiresIn: session.expiresIn,
+      uid: session.localId,
+      email: session.email,
+      fullName: (data?.fullName as string) ?? null,
+      role: (data?.role as UserRole) ?? null,
+      isAdmin: (data?.isAdmin as boolean) ?? false,
+    });
+  } catch (err) {
+    const code = err instanceof IdentityToolkitError ? err.code : "UNKNOWN_ERROR";
+    res.status(401).json({ error: { code } });
+  }
+});
+
+export default router;
