@@ -1,15 +1,17 @@
 import nodemailer from "nodemailer";
 import { RequestStatus } from "./types";
 
+// family:4 forces IPv4 — Railway's IPv6 routing to smtp.gmail.com times out
 const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
   port: 587,
   secure: false,
+  family: 4,
   auth: {
     user: process.env.GMAIL_USER,
     pass: process.env.GMAIL_APP_PASSWORD,
   },
-});
+} as Parameters<typeof nodemailer.createTransport>[0]);
 
 const FROM = `מעקף <${process.env.GMAIL_USER}>`;
 
