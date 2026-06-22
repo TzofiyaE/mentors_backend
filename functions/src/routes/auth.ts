@@ -155,6 +155,16 @@ router.post("/forgot-password", async (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+// GET /auth/verify-status/:uid - poll whether a user's email has been verified yet
+router.get("/verify-status/:uid", async (req: Request, res: Response) => {
+  try {
+    const userRecord = await admin.auth().getUser(req.params.uid);
+    res.json({ verified: userRecord.emailVerified });
+  } catch {
+    res.status(404).json({ error: { code: "USER_NOT_FOUND" } });
+  }
+});
+
 // POST /auth/resend-verification - generate a new verification link and email it
 router.post("/resend-verification", async (req: Request, res: Response) => {
   const { email } = req.body as { email?: string };
