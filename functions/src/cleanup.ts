@@ -14,8 +14,9 @@ export const cleanupUnverifiedAccounts = onSchedule(
     const db = admin.firestore();
     const cutoff = new Date(Date.now() - UNVERIFIED_TTL_MS);
     let pageToken: string | undefined;
-    let deleted = 0;
-    let errors = 0;
+    let authDeleted = 0;
+    let authErrors = 0;
+    let firestoreErrors = 0;
 
     do {
       const { users, pageToken: next } = await admin.auth().listUsers(1000, pageToken);
@@ -30,9 +31,9 @@ export const cleanupUnverifiedAccounts = onSchedule(
           // If Auth succeeds but Firestore fails, the orphaned docs are harmless (no login possible).
           try {
             await admin.auth().deleteUser(user.uid);
-            deleted++;
+            authDeleted++;
           } catch (err) {
-            errors++;
+            authErrors++;
             console.error(`cleanup: failed to delete auth user ${user.uid}`, err);
             return;
           }
@@ -44,7 +45,7 @@ export const cleanupUnverifiedAccounts = onSchedule(
             batch.delete(db.collection("menteeProfiles").doc(user.uid));
             await batch.commit();
           } catch (err) {
-            errors++;
+            firestoreErrors++;
             console.error(`cleanup: failed to delete firestore docs for ${user.uid}`, err);
           }
         })
@@ -53,6 +54,6 @@ export const cleanupUnverifiedAccounts = onSchedule(
       pageToken = next;
     } while (pageToken);
 
-    console.log(`cleanup: deleted=${deleted} errors=${errors} cutoff=${cutoff.toISOString()}`);
+    console.log(`cleanup: authDeleted=${authDeleted} authErrors=${authErrors} firestoreErrors=${firestoreErrors} cutoff=${cutoff.toISOString()}`);
   }
 );
