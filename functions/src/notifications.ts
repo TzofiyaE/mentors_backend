@@ -32,13 +32,47 @@ export function notifyNewRequest(
   mentorId: string,
   menteeName: string,
   topic: string,
-  requestId: string
+  requestId: string,
+  description?: string | null
 ): Promise<void> {
+  const snippet = description
+    ? ` — ${description.length > 80 ? description.slice(0, 80) + "…" : description}`
+    : "";
   return createNotification(
     mentorId,
     "new_request",
     "בקשת מנטורינג חדשה",
-    `${menteeName} שלח/ה לך בקשת מנטורינג בנושא: ${topic}`,
+    `${menteeName} שלח/ה לך בקשה בנושא: ${topic}${snippet}`,
+    requestId
+  );
+}
+
+export function notifyMenteeCancel(
+  mentorId: string,
+  menteeName: string,
+  topic: string,
+  requestId: string
+): Promise<void> {
+  return createNotification(
+    mentorId,
+    "mentee_action",
+    "בקשת מנטורינג בוטלה",
+    `${menteeName} ביטל/ה את הבקשה בנושא: ${topic}`,
+    requestId
+  );
+}
+
+export function notifyMenteeReply(
+  mentorId: string,
+  menteeName: string,
+  topic: string,
+  requestId: string
+): Promise<void> {
+  return createNotification(
+    mentorId,
+    "mentee_action",
+    "המנטי הוסיף/ה מידע נוסף לבקשה",
+    `${menteeName} הגיב/ה לבקשה בנושא: ${topic}`,
     requestId
   );
 }

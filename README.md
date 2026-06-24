@@ -58,32 +58,50 @@ menteeProfiles/{uid}
 mentorshipRequests/{id}
   menteeId
   mentorId
-  menteeName    # denormalized for the mentor's dashboard
-  mentorName    # denormalized for the mentee's dashboard
+  menteeName      # denormalized for the mentor's dashboard
+  mentorName      # denormalized for the mentee's dashboard
   topic
   description
-  status: "pending" | "approved" | "rejected" | "needs_info" | "completed"
-  mentorResponse
+  status: "pending" | "approved" | "rejected" | "needs_info" | "completed" | "canceled"
+  mentorResponse  # mentor's last message (overwritten on each response)
+  menteeReply     # mentee's reply after needs_info (overwritten on resubmit)
   createdAt
   updatedAt
 
+  timeline/{eventId}   # subcollection — full conversation history
+    type: "created" | "status_changed"
+    authorId
+    authorRole: "mentor" | "mentee"
+    content           # message text, if any
+    fromStatus        # null for the initial "created" event
+    toStatus
+    createdAt
+
 topics/{id}
   name
+
+notifications/{uid}/items/{notifId}
+  type: "new_request" | "request_response"
+  title
+  body
+  read
+  requestId    # links to the specific mentorshipRequests doc
+  createdAt
 ```
 
 The required/optional split for `mentorProfiles` and `menteeProfiles` matches the
 registration forms at `/he/mentorship/register/` in maakaf_home (mentor: שם מלא,
 אימייל, סיסמה, תחומי התמחות required; mentee: שם מלא, אימייל, סיסמה, תחומי עניין
-required). The `status` values match the badges shown on `/he/mentorship/dashboard/`,
-`/mentor-dashboard/`, and `/admin/`:
+required). The `status` values match the badges shown on the dashboards:
 
-| status | Hebrew badge |
-| --- | --- |
-| `pending` | בהמתנה |
-| `approved` | אושרה |
-| `rejected` | נדחתה |
-| `needs_info` | דורש פרטים נוספים |
-| `completed` | הושלמה |
+| status | Hebrew badge | Who can set it |
+| --- | --- | --- |
+| `pending` | בהמתנה | system (on create or mentee resubmit) |
+| `approved` | אושרה | mentor |
+| `rejected` | נדחתה | mentor (response text required) |
+| `needs_info` | דורש פרטים נוספים | mentor (response text required) |
+| `completed` | הושלמה | mentor or mentee |
+| `canceled` | בוטלה | mentee (only from `pending`) |
 
 `users/{uid}` and the matching `mentorProfiles/{uid}`/`menteeProfiles/{uid}` doc are
 created server-side by `POST /auth/register` using the Admin SDK (`role` and
@@ -99,18 +117,25 @@ Authenticated endpoints expect `Authorization: Bearer <Firebase ID token>`.
 | POST | `/auth/register` | — | Create account (`role`, `fullName`, `email`, `password`, + role profile fields), write `users/{uid}` + profile doc, and sign in |
 | POST | `/auth/login` | — | Sign in with `email`/`password`, returns `idToken`/`refreshToken`/`uid`/`role` |
 | POST | `/auth/forgot-password` | — | Send a password reset email via Firebase + Gmail |
+| GET | `/auth/verify-status/:uid` | — | Poll whether a user's email has been verified |
+| POST | `/auth/resend-verification` | — | Resend the verification email |
+| POST | `/auth/refresh` | — | Exchange a refresh token for a new ID token |
 | GET | `/topics` | — | List shared mentorship topics |
 | POST | `/topics` | admin | Add a topic |
 | GET | `/mentors` | — | Public mentor directory. Query: `?topic=`, `?availability=` |
 | GET | `/mentors/:id` | — | A single mentor profile |
 | PUT | `/mentors/me` | mentor | Create/update the signed-in user's mentor profile |
 | GET | `/mentees/me` | mentee | The signed-in user's mentee profile |
-| GET | `/mentees/:uid` | mentor/admin/self | A mentee's profile — accessible to the mentee themselves, admins, or any mentor with a request from that mentee |
+| GET | `/mentees/:uid` | mentor/admin/self | A mentee's profile |
 | PUT | `/mentees/me` | mentee | Create/update the signed-in user's mentee profile |
-| POST | `/requests` | mentee | Create a mentorship request |
+| POST | `/requests` | mentee | Create a mentorship request (returns `409 DUPLICATE_REQUEST` if an active request with the same mentor already exists) |
 | GET | `/requests` | any | List requests where the caller is the mentee or mentor |
-| PATCH | `/requests/:id` | mentor/mentee | Update request status |
+| PATCH | `/requests/:id` | mentor/mentee | Update request status. Mentor: `approved`, `rejected`, `needs_info`, `completed`. Mentee: resubmit (`pending` + optional `menteeReply` after `needs_info`), `canceled` (from `pending`), `completed` (from `approved`) |
+| GET | `/requests/:id/timeline` | mentor/mentee | Full chronological event history for a request |
 | GET | `/admin/stats` | admin | Counts + status breakdown for the admin dashboard |
+| GET | `/notifications` | any | The signed-in user's recent notifications (last 50) |
+| PATCH | `/notifications/:id/read` | any | Mark a single notification as read |
+| POST | `/notifications/read-all` | any | Mark all notifications as read |
 
 ## Local development
 
@@ -140,17 +165,6 @@ FIREBASE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
 `GMAIL_USER` / `GMAIL_APP_PASSWORD` — Gmail account used as the email sender. Enable 2FA on the account, then generate an App Password at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords).  
 `SITE_URL` — base URL of the frontend. Used in email links. Set to the production domain when deploying.
 
-## Email notifications
-
-Handled by `functions/src/email.ts` via Nodemailer + Gmail SMTP. All sends are fire-and-forget — email failures are logged but never block the API response.
-
-| Trigger | Recipient | Subject |
-| --- | --- | --- |
-| New user registers (mentor or mentee) | The new user | ברוך/ה הבא/ה למערכת המנטורינג של מעקף! |
-| Mentee submits a request | The mentor | בקשת מנטורינג חדשה מ-{menteeName} |
-| Mentor responds to a request | The mentee | עדכון בקשת המנטורינג שלך — {status} |
-| User requests password reset | The user | איפוס סיסמה — מעקף מנטורינג |
-
 ### 2. Run
 
 ```sh
@@ -162,6 +176,19 @@ npm run dev
 First time only: `cd functions && npm install`.
 
 `maakaf_home` must also be running — from the `maakaf_home` repo root, run `hugo server`.
+
+## Email notifications
+
+Handled by `functions/src/email.ts` via Nodemailer + Gmail SMTP. All sends are fire-and-forget — email failures are logged but never block the API response.
+
+| Trigger | Recipient | Subject |
+| --- | --- | --- |
+| New user registers | The new user | ברוך/ה הבא/ה למערכת המנטורינג של מעקף! |
+| Mentee submits a request | The mentor | בקשת מנטורינג חדשה מ-{menteeName} (includes description + deep-link to request) |
+| Mentor responds to a request | The mentee | עדכון בקשת המנטורינג שלך — {status} (includes response text + deep-link to request) |
+| User requests password reset | The user | איפוס סיסמה — מעקף מנטורינג |
+
+Email CTAs link directly to the specific request card via `#req-{requestId}` anchors on the dashboard pages.
 
 ## Firestore rules
 

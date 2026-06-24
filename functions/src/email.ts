@@ -76,24 +76,33 @@ export async function sendNewRequestEmail(
   mentorEmail: string,
   mentorName: string,
   menteeName: string,
-  topic: string
+  topic: string,
+  description: string | null,
+  requestId: string
 ): Promise<void> {
+  const descriptionBlock = description
+    ? `<blockquote style="border-right:3px solid #0d6efd;margin:16px 0;padding:8px 16px;color:#444;">${escapeHtml(description)}</blockquote>`
+    : "";
+
   await send(
     mentorEmail,
     `בקשת מנטורינג חדשה מ-${menteeName}`,
     layout(`
       <h2>שלום ${escapeHtml(mentorName)},</h2>
       <p><strong>${escapeHtml(menteeName)}</strong> שלח/ה לך בקשת מנטורינג חדשה בנושא: <strong>${escapeHtml(topic)}</strong>.</p>
-      ${dashboardBtn(`${SITE_BASE}/he/mentorship/mentor-dashboard/`, "צפייה בבקשה ומענה")}
+      ${descriptionBlock}
+      ${dashboardBtn(`${SITE_BASE}/he/mentorship/mentor-dashboard/#req-${requestId}`, "צפייה בבקשה ומענה")}
     `)
   );
 }
 
 const STATUS_LABELS: Record<string, string> = {
+  pending:    "בהמתנה",
   approved:   "אושרה",
   rejected:   "נדחתה",
   needs_info: "דורש פרטים נוספים",
   completed:  "הושלמה",
+  canceled:   "בוטלה",
 };
 
 export async function sendMentorResponseEmail(
@@ -101,7 +110,8 @@ export async function sendMentorResponseEmail(
   menteeName: string,
   mentorName: string,
   status: RequestStatus,
-  mentorResponse: string | null
+  mentorResponse: string | null,
+  requestId: string
 ): Promise<void> {
   const statusLabel = STATUS_LABELS[status] ?? status;
   const responseBlock = mentorResponse
@@ -115,7 +125,7 @@ export async function sendMentorResponseEmail(
       <h2>שלום ${escapeHtml(menteeName)},</h2>
       <p>${escapeHtml(mentorName)} עדכן/ה את הבקשה שלך לסטטוס: <strong>${statusLabel}</strong>.</p>
       ${responseBlock}
-      ${dashboardBtn(`${SITE_BASE}/he/mentorship/mentee-dashboard/`, "מעבר לדשבורד שלי")}
+      ${dashboardBtn(`${SITE_BASE}/he/mentorship/mentee-dashboard/#req-${requestId}`, "מעבר לדשבורד שלי")}
     `)
   );
 }
