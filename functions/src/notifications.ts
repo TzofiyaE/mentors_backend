@@ -47,6 +47,21 @@ export function notifyNewRequest(
   );
 }
 
+export function notifyMenteeCancel(
+  mentorId: string,
+  menteeName: string,
+  topic: string,
+  requestId: string
+): Promise<void> {
+  return createNotification(
+    mentorId,
+    "mentee_action",
+    "בקשת מנטורינג בוטלה",
+    `${menteeName} ביטל/ה את הבקשה בנושא: ${topic}`,
+    requestId
+  );
+}
+
 export function notifyMenteeReply(
   mentorId: string,
   menteeName: string,
@@ -55,7 +70,7 @@ export function notifyMenteeReply(
 ): Promise<void> {
   return createNotification(
     mentorId,
-    "new_request",
+    "mentee_action",
     "המנטי הוסיף/ה מידע נוסף לבקשה",
     `${menteeName} הגיב/ה לבקשה בנושא: ${topic}`,
     requestId

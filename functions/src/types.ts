@@ -76,7 +76,7 @@ export interface TimelineEvent {
   createdAt: firestore.Timestamp;
 }
 
-export type NotificationType = "new_request" | "request_response";
+export type NotificationType = "new_request" | "request_response" | "mentee_action";
 
 export interface NotificationDoc {
   type: NotificationType;

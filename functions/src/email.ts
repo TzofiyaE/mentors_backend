@@ -97,10 +97,12 @@ export async function sendNewRequestEmail(
 }
 
 const STATUS_LABELS: Record<string, string> = {
+  pending:    "בהמתנה",
   approved:   "אושרה",
   rejected:   "נדחתה",
   needs_info: "דורש פרטים נוספים",
   completed:  "הושלמה",
+  canceled:   "בוטלה",
 };
 
 export async function sendMentorResponseEmail(

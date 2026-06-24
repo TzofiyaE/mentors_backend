@@ -3,13 +3,16 @@ import * as admin from "firebase-admin";
 import { requireAuth, AuthedRequest } from "../middleware/auth";
 import { MentorshipRequest, RequestStatus } from "../types";
 import { sendNewRequestEmail, sendMentorResponseEmail } from "../email";
-import { notifyNewRequest, notifyRequestResponse, notifyMenteeReply } from "../notifications";
+import { notifyNewRequest, notifyRequestResponse, notifyMenteeReply, notifyMenteeCancel } from "../notifications";
 import { addTimelineEvent } from "../timeline";
 
 const router = Router();
 const db = () => admin.firestore();
 
 const MENTOR_TRANSITIONS: RequestStatus[] = ["approved", "rejected", "needs_info", "completed"];
+
+const TOPIC_MAX       = 200;
+const DESCRIPTION_MAX = 2000;
 
 // POST /requests - a mentee creates a new mentorship request
 router.post("/", requireAuth, async (req: AuthedRequest, res) => {
@@ -28,9 +31,19 @@ router.post("/", requireAuth, async (req: AuthedRequest, res) => {
       return;
     }
 
+    if (topic.length > TOPIC_MAX || (description && description.length > DESCRIPTION_MAX)) {
+      res.status(400).json({ error: { code: "FIELD_TOO_LONG" } });
+      return;
+    }
+
     const mentorDoc = await db().collection("mentorProfiles").doc(mentorId).get();
     if (!mentorDoc.exists) {
       res.status(404).json({ error: { code: "NOT_FOUND" } });
+      return;
+    }
+
+    if (mentorDoc.data()?.availability === "unavailable") {
+      res.status(400).json({ error: { code: "MENTOR_UNAVAILABLE" } });
       return;
     }
 
@@ -95,7 +108,14 @@ router.get("/", requireAuth, async (req: AuthedRequest, res) => {
       db().collection("mentorshipRequests").where("mentorId", "==", uid).get(),
     ]);
 
-    const requests = [...asMentee.docs, ...asMentor.docs].map((d) => ({ id: d.id, ...d.data() }));
+    let requests = [...asMentee.docs, ...asMentor.docs].map((d) => ({ id: d.id, ...d.data() }));
+
+    // Optional comma-separated status filter: ?status=pending,approved
+    if (typeof req.query.status === "string") {
+      const allowed = new Set(req.query.status.split(",").map(s => s.trim()));
+      requests = requests.filter(r => allowed.has((r as unknown as { status: string }).status));
+    }
+
     res.json(requests);
   } catch (err) {
     console.error("GET /requests error:", err);
@@ -155,6 +175,7 @@ router.patch("/:id", requireAuth, async (req: AuthedRequest, res) => {
       await ref.update({
         status,
         mentorResponse: mentorResponse ?? null,
+        menteeReply: null,  // clear stale reply once mentor has responded
         updatedAt: now,
       });
 
@@ -193,6 +214,9 @@ router.patch("/:id", requireAuth, async (req: AuthedRequest, res) => {
 
       addTimelineEvent(req.params.id, uid, "mentee", "canceled", "pending", null)
         .catch((err) => console.error("Failed to add timeline event:", err));
+
+      notifyMenteeCancel(current.mentorId, current.menteeName, current.topic, req.params.id)
+        .catch((err) => console.error("Failed to create cancel notification:", err));
 
     } else if (isMentee && current.status === "approved" && status === "completed") {
       await ref.update({ status: "completed", updatedAt: now });
