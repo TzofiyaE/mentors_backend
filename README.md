@@ -18,6 +18,13 @@ system. Consumed by the מנטורינג pages in
   the returned ID token and sends it as `Authorization: Bearer <token>`.
 - Gmail API (OAuth2) — transactional emails (verification, mentorship requests, password reset)
 
+### Shared utilities (`functions/src/`)
+
+| File | Purpose |
+| --- | --- |
+| `utils.ts` | `generateOTP()` (crypto-random 6-digit code), `getOTPExpiry()`, `timingSafeEqual()` (constant-time comparison), `parseAvailability()` |
+| `rateLimiter.ts` | In-memory per-key rate limiter with auto-pruning; used on login, OTP and reset endpoints |
+
 `functions/src/index.ts` is a dormant Firebase Cloud Functions entry kept for future
 use if the project moves to the Firebase Blaze billing plan.
 
@@ -160,6 +167,9 @@ GOOGLE_APPLICATION_CREDENTIALS=./serviceAccountKey.json
 FIREBASE_API_KEY=your-firebase-web-api-key
 SITE_URL=http://localhost:1313
 
+# Allowed CORS origin (defaults to SITE_URL; set to production domain in prod)
+CORS_ORIGIN=http://localhost:1313
+
 # Gmail API OAuth2 (console.cloud.google.com → Gmail API → OAuth2)
 GMAIL_USER=donotreplymkf@gmail.com
 GMAIL_CLIENT_ID=xxxx.apps.googleusercontent.com
@@ -192,6 +202,20 @@ npm run dev
 First time only: `cd functions && npm install`.
 
 `maakaf_home` must also be running — from the `maakaf_home` repo root, run `hugo server`.
+
+## Security
+
+| Mechanism | Detail |
+| --- | --- |
+| **Rate limiting** | Login: 10/15 min per email. OTP verify & reset: 5/15 min per UID. Forgot-password & resend: 3/10 min per email. Blocked → `429 TOO_MANY_ATTEMPTS`. Counter cleared on success. |
+| **Timing-safe OTP** | Code comparisons use `crypto.timingSafeEqual()` to prevent timing-based enumeration. |
+| **Crypto-random OTP** | `crypto.randomInt()` — uniform distribution, no modulo bias. |
+| **CORS** | Restricted to `CORS_ORIGIN` env var; all other origins rejected. |
+| **Body size limit** | `express.json({ limit: "50kb" })` — oversized payloads rejected. |
+| **Input validation** | `mentorId` and `topic` type-checked as non-empty strings before DB access. |
+| **Error format** | All routes return `{ error: { code: "..." } }` — no plain-string errors. |
+| **Privilege gating** | `requireAuth` + `requireAdmin` on all protected routes; `isAdmin` is server-set only. |
+| **Mentee profile access** | Mentor can only view a mentee's profile while an active request (`pending`/`approved`/`needs_info`) exists between them. |
 
 ## Email notifications
 
