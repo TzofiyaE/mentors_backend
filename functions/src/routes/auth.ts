@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express";
 import * as admin from "firebase-admin";
 import { MentorProfile, MenteeProfile, UserDoc, UserRole } from "../types";
 import { signInWithPassword, refreshIdToken, IdentityToolkitError } from "../identityToolkit";
-import { sendVerificationEmail, sendPasswordResetEmail } from "../email";
+import { sendVerificationCode, sendPasswordResetEmail } from "../email";
 
 const router = Router();
 const db = () => admin.firestore();
@@ -133,13 +133,16 @@ router.post("/register", async (req: Request, res: Response) => {
     return;
   }
 
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiry = admin.firestore.Timestamp.fromDate(new Date(Date.now() + 15 * 60 * 1000));
+  await db().collection("users").doc(uid).update({ verificationCode: code, verificationCodeExpiry: expiry });
+  console.log(`[verify] code=${code} generated for uid=${uid}`);
+
   try {
-    const verificationLink = await admin.auth().generateEmailVerificationLink(email!);
-    sendVerificationEmail(email!, fullName!, verificationLink).catch((err) =>
-      console.error("Failed to send verification email:", err)
-    );
+    await sendVerificationCode(email!, fullName!, code);
+    console.log(`[verify] code email sent to ${email}`);
   } catch (err) {
-    console.error("Failed to generate verification link:", err);
+    console.error("[verify] failed to send verification code email:", err);
   }
 
   res.status(201).json({ uid, email, role, pendingVerification: true });
@@ -184,10 +187,13 @@ router.post("/resend-verification", async (req: Request, res: Response) => {
   try {
     const userRecord = await admin.auth().getUserByEmail(email);
     if (!userRecord.emailVerified) {
-      const userDoc = await db().collection("users").doc(userRecord.uid).get();
+      const userRef = db().collection("users").doc(userRecord.uid);
+      const userDoc = await userRef.get();
       const fullName = (userDoc.data()?.fullName as string) ?? email;
-      const verificationLink = await admin.auth().generateEmailVerificationLink(email);
-      await sendVerificationEmail(email, fullName, verificationLink);
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiry = admin.firestore.Timestamp.fromDate(new Date(Date.now() + 15 * 60 * 1000));
+      await userRef.update({ verificationCode: code, verificationCodeExpiry: expiry });
+      await sendVerificationCode(email, fullName, code);
     }
   } catch (err) {
     console.error("resend-verification error:", err);
@@ -195,6 +201,58 @@ router.post("/resend-verification", async (req: Request, res: Response) => {
 
   // Always respond ok — don't reveal whether the email exists or is already verified
   res.json({ ok: true });
+});
+
+// POST /auth/verify-code - validate OTP, mark verified, auto-login
+router.post("/verify-code", async (req: Request, res: Response) => {
+  const { uid, code, email, password } = req.body as {
+    uid?: string; code?: string; email?: string; password?: string;
+  };
+
+  if (!uid || !code || !email || !password) {
+    res.status(400).json({ error: { code: "MISSING_FIELDS" } });
+    return;
+  }
+
+  try {
+    const userRef = db().collection("users").doc(uid);
+    const userDoc = await userRef.get();
+    const data = userDoc.data();
+
+    if (!data?.verificationCode) {
+      res.status(400).json({ error: { code: "INVALID_CODE" } });
+      return;
+    }
+    if ((data.verificationCodeExpiry as admin.firestore.Timestamp).toDate() < new Date()) {
+      res.status(400).json({ error: { code: "CODE_EXPIRED" } });
+      return;
+    }
+    if (data.verificationCode !== code) {
+      res.status(400).json({ error: { code: "INVALID_CODE" } });
+      return;
+    }
+
+    await admin.auth().updateUser(uid, { emailVerified: true });
+    await userRef.update({
+      verificationCode: admin.firestore.FieldValue.delete(),
+      verificationCodeExpiry: admin.firestore.FieldValue.delete(),
+    });
+
+    const session = await signInWithPassword(email, password);
+    res.json({
+      idToken:      session.idToken,
+      refreshToken: session.refreshToken,
+      expiresIn:    session.expiresIn,
+      uid:          session.localId,
+      email:        session.email,
+      fullName:     (data.fullName as string) ?? null,
+      role:         (data.role as string) ?? null,
+      isAdmin:      (data.isAdmin as boolean) ?? false,
+    });
+  } catch (err) {
+    console.error("verify-code error:", err);
+    res.status(500).json({ error: { code: "INTERNAL_ERROR" } });
+  }
 });
 
 // POST /auth/refresh - exchange a refresh token for a new ID token
@@ -227,6 +285,19 @@ router.post("/login", async (req: Request, res: Response) => {
   try {
     const preCheck = await admin.auth().getUserByEmail(email);
     if (!preCheck.emailVerified) {
+      // Send a fresh OTP so the user has a code ready on the verify screen
+      try {
+        const userRef = db().collection("users").doc(preCheck.uid);
+        const userDoc = await userRef.get();
+        const fullName = (userDoc.data()?.fullName as string) ?? email;
+        const code = Math.floor(100000 + Math.random() * 900000).toString();
+        const expiry = admin.firestore.Timestamp.fromDate(new Date(Date.now() + 15 * 60 * 1000));
+        await userRef.update({ verificationCode: code, verificationCodeExpiry: expiry });
+        await sendVerificationCode(email, fullName, code);
+        console.log(`[verify] login: code sent to ${email}`);
+      } catch (codeErr) {
+        console.error("[verify] login: failed to send code:", codeErr);
+      }
       res.status(403).json({ error: { code: "EMAIL_NOT_VERIFIED" }, uid: preCheck.uid });
       return;
     }

@@ -25,11 +25,13 @@ use if the project moves to the Firebase Blaze billing plan.
 
 ```text
 users/{uid}
-  role: "mentor" | "mentee"
+  role: "mentor" | "mentee" | "admin"
   fullName
   email
   isAdmin
   createdAt
+  verificationCode         (temporary — present only while email is unverified)
+  verificationCodeExpiry   (Timestamp — code valid for 15 minutes)
 
 mentorProfiles/{uid}
   userId
@@ -113,11 +115,12 @@ Authenticated endpoints expect `Authorization: Bearer <Firebase ID token>`.
 
 | Method | Path | Auth | Description |
 | --- | --- | --- | --- |
-| POST | `/auth/register` | — | Create account (`role`, `fullName`, `email`, `password`, + role profile fields), write `users/{uid}` + profile doc, and sign in |
-| POST | `/auth/login` | — | Sign in with `email`/`password`, returns `idToken`/`refreshToken`/`uid`/`role` |
-| POST | `/auth/forgot-password` | — | Send a password reset email via Firebase + Gmail |
-| GET | `/auth/verify-status/:uid` | — | Poll whether a user's email has been verified |
-| POST | `/auth/resend-verification` | — | Resend the verification email |
+| POST | `/auth/register` | — | Create account, send 6-digit OTP to email, return `uid` + `pendingVerification: true` |
+| POST | `/auth/verify-code` | — | Validate OTP (`uid`, `code`, `email`, `password`), mark email verified, auto-login — returns full session |
+| POST | `/auth/resend-verification` | — | Generate + send a fresh OTP to the given email |
+| POST | `/auth/login` | — | Sign in; if email unverified, sends fresh OTP and returns `403 EMAIL_NOT_VERIFIED` + `uid` |
+| POST | `/auth/forgot-password` | — | Send a password reset email |
+| GET | `/auth/verify-status/:uid` | — | Check whether a user's email has been verified |
 | POST | `/auth/refresh` | — | Exchange a refresh token for a new ID token |
 | GET | `/topics` | — | List shared mentorship topics |
 | POST | `/topics` | admin | Add a topic |
@@ -195,7 +198,9 @@ All emails share a common `layout()` wrapper that includes the Maakaf logo (`htt
 
 | Trigger | Recipient | Subject |
 | --- | --- | --- |
-| New user registers (mentor/mentee) | The new user | אמת/י את כתובת האימייל שלך — מעקף מנטורינג |
+| New user registers (mentor/mentee) | The new user | קוד האימות שלך — מעקף מנטורינג |
+| Unverified user tries to log in | The user | קוד האימות שלך — מעקף מנטורינג |
+| User requests a new OTP code | The user | קוד האימות שלך — מעקף מנטורינג |
 | Mentee submits a request | The mentor | בקשת מנטורינג חדשה מ-{menteeName} (includes description + deep-link to request) |
 | Mentor responds to a request | The mentee | עדכון בקשת המנטורינג שלך — {status} (includes response text + deep-link to request) |
 | User requests password reset | The user | איפוס סיסמה — מעקף מנטורינג |

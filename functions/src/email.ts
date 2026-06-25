@@ -60,20 +60,20 @@ async function send(to: string, subject: string, html: string): Promise<void> {
   });
 }
 
-export async function sendVerificationEmail(
+export async function sendVerificationCode(
   to: string,
   fullName: string,
-  verificationLink: string
+  code: string
 ): Promise<void> {
   await send(
     to,
-    "אמת/י את כתובת האימייל שלך — מעקף מנטורינג",
+    "קוד האימות שלך — מעקף מנטורינג",
     layout(`
       <h2>שלום ${escapeHtml(fullName)},</h2>
       <p>ברוך/ה הבא/ה למערכת המנטורינג של קהילת מעקף!</p>
-      <p>כדי להשלים את הרשמתך ולהתחיל להשתמש במערכת, יש לאמת את כתובת האימייל שלך:</p>
-      ${dashboardBtn(verificationLink, "אימות כתובת האימייל")}
-      <p style="color:#666;font-size:13px;">הקישור תקף ל-24 שעות. אם לא נרשמתם, ניתן להתעלם מהודעה זו.</p>
+      <p>קוד האימות שלך:</p>
+      <div style="font-size:36px;font-weight:700;letter-spacing:10px;text-align:center;padding:20px;background:#f0f4f8;border-radius:8px;margin:16px 0;">${escapeHtml(code)}</div>
+      <p style="color:#666;font-size:13px;">הקוד תקף ל-15 דקות. אם לא נרשמתם, ניתן להתעלם מהודעה זו.</p>
     `)
   );
 }
