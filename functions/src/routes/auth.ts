@@ -173,8 +173,9 @@ router.post("/register", async (req: Request, res: Response) => {
     const code    = await issueOTP(userRef, "verificationCode");
     await sendVerificationCode(email!, fullName!, code);
     console.log(`[verify] code email sent to ${email}`);
-  } catch (err) {
-    console.error("[verify] failed to send verification code email:", err);
+  } catch (err: any) {
+    console.error("[verify] failed to send verification code email:", err?.message ?? err);
+    console.error("[verify] Gmail error detail:", JSON.stringify(err?.response?.data ?? err?.errors ?? {}));
   }
 
   res.status(201).json({ uid, email, role, pendingVerification: true });

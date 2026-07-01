@@ -1,16 +1,15 @@
-import { google } from "googleapis";
+import nodemailer from "nodemailer";
 import { RequestStatus } from "./types";
 
-const auth = new google.auth.OAuth2(
-  process.env.GMAIL_CLIENT_ID,
-  process.env.GMAIL_CLIENT_SECRET,
-  "https://developers.google.com/oauthplayground"
-);
-auth.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
-
-const gmail = google.gmail({ version: "v1", auth });
-
 const SITE_BASE = process.env.SITE_URL ?? "https://maakaf.com";
+
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_APP_PASSWORD,
+  },
+});
 
 function escapeHtml(s: string): string {
   return s
@@ -19,10 +18,6 @@ function escapeHtml(s: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#x27;");
-}
-
-function mimeWord(text: string) {
-  return `=?UTF-8?B?${Buffer.from(text).toString("base64")}?=`;
 }
 
 function layout(content: string) {
@@ -44,19 +39,16 @@ function dashboardBtn(url: string, label: string) {
 }
 
 async function send(to: string, subject: string, html: string): Promise<void> {
-  const raw = [
-    `From: ${mimeWord("מעקף")} <${process.env.GMAIL_USER}>`,
-    `To: ${to}`,
-    `Subject: ${mimeWord(subject)}`,
-    "MIME-Version: 1.0",
-    "Content-Type: text/html; charset=UTF-8",
-    "",
-    html,
-  ].join("\r\n");
+  if (process.env.DISABLE_EMAILS === "true") {
+    console.log(`[email] suppressed → to: ${to} | subject: ${subject}`);
+    return;
+  }
 
-  await gmail.users.messages.send({
-    userId: "me",
-    requestBody: { raw: Buffer.from(raw).toString("base64url") },
+  await transporter.sendMail({
+    from: `"מעקף" <${process.env.GMAIL_USER}>`,
+    to,
+    subject,
+    html,
   });
 }
 
